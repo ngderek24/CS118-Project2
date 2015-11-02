@@ -13,6 +13,8 @@
 
 using namespace std;
 
+const int BUFFER_SIZE = 4;
+
 void error(string msgString) {
     const char *msg = msgString.c_str();
     perror(msg);
@@ -55,23 +57,35 @@ int main(int argc, char *argv[]) {
     socklen_t senderAddrLength = sizeof(senderAddr);
     struct hostent *sender; //contains tons of information, including the server's IP address
 
-    const int BUFFER_SIZE = 1024;    
     char buffer[BUFFER_SIZE];
     string filename;
     
     setup(sender, senderAddr, argv, sockfd, portno, filename);
     
-    string msg = "msg from receiver";
-    if (sendto(sockfd, msg.c_str(), msg.size(), 0, 
+    if (sendto(sockfd, filename.c_str(), filename.size(), 0, 
             (struct sockaddr *) &senderAddr, senderAddrLength) < 0)
         error("sendto failed");
         
-    int senderLength = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, 
-                            (struct sockaddr *) &senderAddr, &senderAddrLength);
-        
-    if (senderLength > 0) {
+    FILE* fp = fopen(filename.c_str(), "a");
+    int bytesWritten = 0;
+    
+    while (1) { 
+        int senderLength = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, 
+                                (struct sockaddr *) &senderAddr, &senderAddrLength);
         buffer[senderLength] = 0;
-        printf("received message from sender: %s\n", buffer);
+        
+        if (senderLength > 0) {
+            buffer[senderLength] = 0;
+            printf("msg from sender: %s\n", buffer);
+            bytesWritten = fwrite(buffer, 1, BUFFER_SIZE, fp);
+            if (bytesWritten <= 0)
+                error("ERROR writing to file");
+        }
+        
+        if (senderLength < BUFFER_SIZE) {
+            fwrite("\0", 1, 1, fp);
+            break;
+        }
     }
     
     close(sockfd);
