@@ -13,6 +13,8 @@
 
 using namespace std;
 
+const int BUFFER_SIZE = 4;
+
 void error(string msgString) {
     const char *msg = msgString.c_str();
     perror(msg);
@@ -104,8 +106,9 @@ int main(int argc, char *argv[]) {
     portNum = atoi(argv[1]);
     setup(socketfd, senderAddr, portNum);
     
-    const int BUFFER_SIZE = 1024;
     char buffer[BUFFER_SIZE] = {0};
+    int lastByteRead = 0;
+    int bytesRead = 0;
  
     while (1) {
         receiverLength = recvfrom(socketfd, buffer, BUFFER_SIZE, 0, 
@@ -113,11 +116,36 @@ int main(int argc, char *argv[]) {
         
         if (receiverLength > 0) {
             buffer[receiverLength] = 0;
-            printf("received message: %s\n", buffer);
-
-            if (sendto(socketfd, "hello", 5, 0, 
-                        (struct sockaddr *) &receiverAddr, receiverAddrLength) < 0)
-                error("sendto failed");
+            cout << buffer << endl;
+            FILE *fp = fopen(buffer, "r");
+            
+            if (fp == NULL) {
+                error("ERROR opening file");
+            }
+            
+            rewind(fp);
+            
+            // send the file
+            while (1) {
+                bytesRead = fread(buffer, 1, BUFFER_SIZE, fp);
+                if (bytesRead <= 0) 
+                    error("ERROR reading file");
+                lastByteRead += bytesRead;
+                
+                cout << "bytesRead: " << bytesRead << " lastByteRead: " << lastByteRead << endl;
+                
+                if (sendto(socketfd, buffer, bytesRead, 0, 
+                            (struct sockaddr *) &receiverAddr, receiverAddrLength) < 0)
+                    error("sendto failed");
+                
+                if (bytesRead < BUFFER_SIZE) 
+                    break;
+                
+                rewind(fp);
+                if (fseek(fp, lastByteRead, SEEK_CUR) != 0)
+                    error("ERROR seeking file");
+            }
+            fclose(fp);
         }
     }
     
