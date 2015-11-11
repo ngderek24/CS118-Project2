@@ -13,7 +13,8 @@
 
 using namespace std;
 
-const int BUFFER_SIZE = 4;
+const int BUFFER_SIZE = 30;
+const int HEADER_SIZE = 20;
 
 void error(string msgString) {
     const char *msg = msgString.c_str();
@@ -45,6 +46,30 @@ void setup(struct hostent *sender, struct sockaddr_in& senderAddr,
     senderAddr.sin_port = htons(portno);
 }
 
+// build a header
+string buildHeaders(int seqNum, int ackNum, int finFlag) {
+    string header = to_string(seqNum) + "\n" 
+                    + to_string(ackNum) + "\n" 
+                    + to_string(finFlag) + "\n";
+    return header;
+}
+
+bool isLastPacket(char* buffer) {
+    int len = strlen(buffer);
+    int count = 0;
+    for (int i = 0; i < len; i++) {
+        if (buffer[i] == '\n')
+            count++;
+        if (count == 2) {
+            if (buffer[i+1] == '1')
+                return true;
+            else
+                return false;
+        }
+    }
+    return false;
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 3) {
        fprintf(stderr,"usage %s hostname port\n", argv[0]);
@@ -66,7 +91,7 @@ int main(int argc, char *argv[]) {
             (struct sockaddr *) &senderAddr, senderAddrLength) < 0)
         error("sendto failed");
         
-    FILE* fp = fopen(filename.c_str(), "a");
+    FILE* fp = fopen(filename.c_str(), "w+");
     int bytesWritten = 0;
     
     while (1) { 
@@ -77,13 +102,13 @@ int main(int argc, char *argv[]) {
         if (senderLength > 0) {
             buffer[senderLength] = 0;
             printf("msg from sender: %s\n", buffer);
-            bytesWritten = fwrite(buffer, 1, BUFFER_SIZE, fp);
+            bytesWritten = fwrite(buffer + HEADER_SIZE, 1, BUFFER_SIZE - HEADER_SIZE, fp);
             if (bytesWritten <= 0)
                 error("ERROR writing to file");
         }
         
-        if (senderLength < BUFFER_SIZE) {
-            fwrite("\0", 1, 1, fp);
+        if (isLastPacket(buffer)) {
+            cout << "got last packet" << endl;
             break;
         }
     }
