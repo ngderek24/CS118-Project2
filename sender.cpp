@@ -4,16 +4,16 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <stdlib.h>
-#include <strings.h>
+#include <unistd.h>
 #include <iostream>
-#include <ctime>
 #include <cstdio>
 #include <cstring>
-#include <unistd.h>
+#include <string>
 
 using namespace std;
 
-const int BUFFER_SIZE = 4;
+const int BUFFER_SIZE = 30;
+const int HEADER_SIZE = 20;
 
 void error(string msgString) {
     const char *msg = msgString.c_str();
@@ -41,56 +41,57 @@ void setup(int &socketfd, struct sockaddr_in &senderAddr, int portNum) {
         error("ERROR on binding");
 }
 
-// handles request accordingly
-void handleRequest(int socketfd) {
-    int result;
-    char filename[128];
-    bzero(filename, 128);
+// build a header
+string buildHeaders(int seqNum, int ackNum, int finFlag) {
+    string header = to_string(seqNum) + "\n" 
+                    + to_string(ackNum) + "\n" 
+                    + to_string(finFlag) + "\n";
+    return header;
+}
 
-    // read client request
-    result = read(socketfd, filename, 128);
-    if (result < 0) 
-        error("ERROR reading from socket");
-
-    // if no file specified, just display a message
-    if (strlen(filename) == 0) {
-        string response = "Invalid filename";
-        result = write(socketfd, response.c_str(), response.size());
+// build and send packet, return true if last packet
+bool sendPacket(const int& socketfd, struct sockaddr_in* receiverAddr, 
+                const socklen_t& receiverAddrLength, FILE* fp, 
+                const int& seqNum, int& lastByteRead) {
+    char packetBuffer[BUFFER_SIZE] = {0};
+    char fileContent[BUFFER_SIZE - HEADER_SIZE] = {0};
+    string headers;
+    
+    // read file into fileContent
+    int bytesRead = fread(fileContent, 1, BUFFER_SIZE - HEADER_SIZE, fp);
+    if (bytesRead <= 0) 
+        error("ERROR reading file");
+    lastByteRead += bytesRead;
+    
+    // reached end of file
+    if (feof(fp)) {
+        headers = buildHeaders(seqNum, -1, 1);
+    } else {
+        headers = buildHeaders(seqNum, -1, 0);
+    }
+    
+    // copy header into packetBuffer
+    strcpy(packetBuffer, headers.c_str());
+    int headerSize = headers.size();
+    memset(packetBuffer + headerSize, ' ', HEADER_SIZE - headerSize);
+    
+    strcpy(packetBuffer + HEADER_SIZE, fileContent);
+    
+    cout << packetBuffer << endl;
+    
+    if (sendto(socketfd, packetBuffer, HEADER_SIZE + bytesRead, 0, 
+                (struct sockaddr *) receiverAddr, receiverAddrLength) < 0)
+        error("sendto failed");
+    
+    if (feof(fp)) {
+        return true;
+    }
+    
+    rewind(fp);
+    if (fseek(fp, lastByteRead, SEEK_CUR) != 0)
+        error("ERROR seeking file");
         
-        if (result < 0) 
-            error("ERROR writing to socket");
-    }
-    else {
-        // open file for reading
-        FILE *fp = fopen(filename, "r");
-        if (fp == NULL) {
-            string response = "File Not Found";
-            result = write(socketfd, response.c_str(), response.size());
-            if (result < 0) 
-                error("ERROR writing to socket");
-            //cout << "ERROR opening file" << endl;
-        }
-        else {
-            // write file to buffer
-            const int BUFFER_SIZE = 2000000;
-            char writeBuffer[BUFFER_SIZE] = { 0 };
-            int bytesRead = fread(writeBuffer, 1, BUFFER_SIZE, fp);
-            
-            if (bytesRead > 0) {
-                // send response to client
-                result = write(socketfd, writeBuffer, BUFFER_SIZE);
-                if (result < 0) 
-                    error("ERROR writing to socket");
-            }
-            else {
-                string response = "Error Reading File";
-                result = write(socketfd, response.c_str(), response.size());
-                if (result < 0) 
-                    error("ERROR writing to socket");
-            }
-        }
-        fclose(fp);
-    }
+    return false;
 }
 
 int main(int argc, char *argv[]) {
@@ -116,7 +117,6 @@ int main(int argc, char *argv[]) {
         
         if (receiverLength > 0) {
             buffer[receiverLength] = 0;
-            cout << buffer << endl;
             FILE *fp = fopen(buffer, "r");
             
             if (fp == NULL) {
@@ -124,26 +124,15 @@ int main(int argc, char *argv[]) {
             }
             
             rewind(fp);
+            int seqNum = 1;
+            string headers = "";
+            char fileContent[BUFFER_SIZE - HEADER_SIZE];
             
             // send the file
             while (1) {
-                bytesRead = fread(buffer, 1, BUFFER_SIZE, fp);
-                if (bytesRead <= 0) 
-                    error("ERROR reading file");
-                lastByteRead += bytesRead;
-                
-                cout << "bytesRead: " << bytesRead << " lastByteRead: " << lastByteRead << endl;
-                
-                if (sendto(socketfd, buffer, bytesRead, 0, 
-                            (struct sockaddr *) &receiverAddr, receiverAddrLength) < 0)
-                    error("sendto failed");
-                
-                if (bytesRead < BUFFER_SIZE) 
+                if (sendPacket(socketfd, &receiverAddr, receiverAddrLength, fp, seqNum, lastByteRead))
                     break;
-                
-                rewind(fp);
-                if (fseek(fp, lastByteRead, SEEK_CUR) != 0)
-                    error("ERROR seeking file");
+                seqNum++;
             }
             fclose(fp);
         }
