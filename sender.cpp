@@ -43,19 +43,29 @@ void setup(int &socketfd, struct sockaddr_in &senderAddr, int portNum) {
 
 // build a header
 string buildHeaders(int seqNum, int ackNum, int finFlag) {
-    string header = to_string(seqNum) + "\n" 
-                    + to_string(ackNum) + "\n" 
-                    + to_string(finFlag) + "\n";
-    return header;
+    char header[HEADER_SIZE];
+    sprintf(header, "%d\n%d\n%d\n", seqNum, ackNum, finFlag);
+    
+    return string(header);
 }
 
-// build and send packet, return true if last packet
+// send a packet that was built with buildPacket
 bool sendPacket(const int& socketfd, struct sockaddr_in* receiverAddr, 
-                const socklen_t& receiverAddrLength, FILE* fp, 
-                const int& seqNum, int& lastByteRead) {
-    char packetBuffer[BUFFER_SIZE] = {0};
+                const socklen_t& receiverAddrLength, const char* packetBuffer) {
+                
+    if (sendto(socketfd, packetBuffer, strlen(packetBuffer), 0, 
+                (struct sockaddr *) receiverAddr, receiverAddrLength) < 0)
+        return false;
+    else 
+        return true;    
+}
+
+// build a packet, return true if last packet
+bool buildPacket(char* packetBuffer, FILE* fp, const int& seqNum, int& lastByteRead) {
+    memset(packetBuffer, 0, BUFFER_SIZE);
     char fileContent[BUFFER_SIZE - HEADER_SIZE] = {0};
     string headers;
+    bool returnVal = false;
     
     // read file into fileContent
     int bytesRead = fread(fileContent, 1, BUFFER_SIZE - HEADER_SIZE, fp);
@@ -76,22 +86,40 @@ bool sendPacket(const int& socketfd, struct sockaddr_in* receiverAddr,
     memset(packetBuffer + headerSize, ' ', HEADER_SIZE - headerSize);
     
     strcpy(packetBuffer + HEADER_SIZE, fileContent);
+    packetBuffer[HEADER_SIZE + bytesRead] = 0;
     
-    cout << packetBuffer << endl;
-    
-    if (sendto(socketfd, packetBuffer, HEADER_SIZE + bytesRead, 0, 
-                (struct sockaddr *) receiverAddr, receiverAddrLength) < 0)
-        error("sendto failed");
+    //sendPacket(socketfd, receiverAddr, receiverAddrLength, packetBuffer);
     
     if (feof(fp)) {
-        return true;
+        returnVal = true;
     }
     
     rewind(fp);
     if (fseek(fp, lastByteRead, SEEK_CUR) != 0)
         error("ERROR seeking file");
         
-    return false;
+    return returnVal;
+}
+
+// get acknowledgement number from packet header
+int getAckNum(const char* buffer) {
+    char tempBuffer[HEADER_SIZE];
+    int len = strlen(buffer);
+    int firstNewline = -1;
+    int count = 0;
+    int ackNum = 0;
+    for (int i = 0; i < len; i++) {
+        if (buffer[i] == '\n')
+            count++;
+        if (count == 1 && firstNewline == -1)
+            firstNewline = i;
+        if (count == 2) {
+            strncpy(tempBuffer, buffer + firstNewline + 1, i - firstNewline - 1);
+            ackNum = atoi(tempBuffer);
+            break;
+        } 
+    }
+    return ackNum;
 }
 
 int main(int argc, char *argv[]) {
@@ -108,7 +136,6 @@ int main(int argc, char *argv[]) {
     setup(socketfd, senderAddr, portNum);
     
     char buffer[BUFFER_SIZE] = {0};
-    int lastByteRead = 0;
     int bytesRead = 0;
  
     while (1) {
@@ -124,15 +151,31 @@ int main(int argc, char *argv[]) {
             }
             
             rewind(fp);
+            int lastByteRead = 0;
             int seqNum = 1;
-            string headers = "";
-            char fileContent[BUFFER_SIZE - HEADER_SIZE];
+            char packetBuffer[BUFFER_SIZE];
+            int ackMsgLength = 0;
             
             // send the file
             while (1) {
-                if (sendPacket(socketfd, &receiverAddr, receiverAddrLength, fp, seqNum, lastByteRead))
+                bool isLastPacket = buildPacket(packetBuffer, fp, seqNum, lastByteRead);
+                
+                while(1) {
+                    if (!sendPacket(socketfd, &receiverAddr, receiverAddrLength, packetBuffer))
+                        continue;
+                    
+                    // receive ACK packet
+                    ackMsgLength = recvfrom(socketfd, buffer, HEADER_SIZE, 0, (struct sockaddr *) &receiverAddr, &receiverAddrLength);
+                    
+                    // current packet ACKed successfully, move onto next packet
+                    if (getAckNum(buffer) == seqNum + 1) {
+                        seqNum++;
+                        break;
+                    }
+                }
+                
+                if (isLastPacket)
                     break;
-                seqNum++;
             }
             fclose(fp);
         }
