@@ -48,10 +48,10 @@ void setup(struct hostent *sender, struct sockaddr_in& senderAddr,
 
 // build a header
 string buildHeaders(int seqNum, int ackNum, int finFlag) {
-    string header = to_string(seqNum) + "\n" 
-                    + to_string(ackNum) + "\n" 
-                    + to_string(finFlag) + "\n";
-    return header;
+    char header[HEADER_SIZE];
+    sprintf(header, "%d\n%d\n%d\n", seqNum, ackNum, finFlag);
+    
+    return string(header);
 }
 
 bool isLastPacket(char* buffer) {
@@ -68,6 +68,34 @@ bool isLastPacket(char* buffer) {
         }
     }
     return false;
+}
+
+// extracts sequence number from a packet buffer
+int getSeqNum(const char* buffer) {
+    int len = strlen(buffer);
+    char tempBuffer[HEADER_SIZE];
+    int seqNum = -1;
+    
+    for (int i = 0; i < len; i++) {
+        if (buffer[i] == '\n') {
+            strncpy(tempBuffer, buffer, i);
+            seqNum = atoi(tempBuffer);
+            break;
+        }
+    }
+    
+    return seqNum;
+}
+
+// send ACK packet to sender
+bool sendAckPacket(const int& socketfd, struct sockaddr_in* senderAddr, 
+                const socklen_t& senderAddrLength, const int& ackNum) {
+    string header = buildHeaders(-1, ackNum, 0);
+    if (sendto(socketfd, header.c_str(), header.size(), 0, 
+                (struct sockaddr *) senderAddr, senderAddrLength) < 0)
+        return false;
+    else
+        return true;
 }
 
 int main(int argc, char *argv[]) {
@@ -102,9 +130,13 @@ int main(int argc, char *argv[]) {
         if (senderLength > 0) {
             buffer[senderLength] = 0;
             printf("msg from sender: %s\n", buffer);
+            
             bytesWritten = fwrite(buffer + HEADER_SIZE, 1, BUFFER_SIZE - HEADER_SIZE, fp);
             if (bytesWritten <= 0)
                 error("ERROR writing to file");
+                
+            while (!sendAckPacket(sockfd, &senderAddr, senderAddrLength, getSeqNum(buffer) + 1))
+                continue;
         }
         
         if (isLastPacket(buffer)) {
