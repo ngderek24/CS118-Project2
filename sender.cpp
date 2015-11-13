@@ -14,6 +14,7 @@ using namespace std;
 
 const int BUFFER_SIZE = 30;
 const int HEADER_SIZE = 20;
+const int WINDOW_SIZE = 4;
 
 void error(string msgString) {
     const char *msg = msgString.c_str();
@@ -81,14 +82,13 @@ bool buildPacket(char* packetBuffer, FILE* fp, const int& seqNum, int& lastByteR
     }
     
     // copy header into packetBuffer
+    //memset(packetBuffer, ' ', BUFFER_SIZE);
     strcpy(packetBuffer, headers.c_str());
     int headerSize = headers.size();
-    memset(packetBuffer + headerSize, ' ', HEADER_SIZE - headerSize);
+    memset(packetBuffer + headerSize, 'f', BUFFER_SIZE - headerSize);
     
     strcpy(packetBuffer + HEADER_SIZE, fileContent);
     packetBuffer[HEADER_SIZE + bytesRead] = 0;
-    
-    //sendPacket(socketfd, receiverAddr, receiverAddrLength, packetBuffer);
     
     if (feof(fp)) {
         returnVal = true;
@@ -122,6 +122,32 @@ int getAckNum(const char* buffer) {
     return ackNum;
 }
 
+void printPacketInfo(const string& packetType, const int& num) {
+    cout << packetType << " " << num << endl;
+}
+
+/*bool sendInitialWindow() {
+    // fill the initial window
+    for (int i = 0; i < WINDOW_SIZE; i++) {
+        bool isLastPacket = buildPacket(window[i], fp, seqNum, lastByteRead);
+        if (isLastPacket) {
+            sentLast = true; 
+            windowTail = i;
+            lastSeqNum = seqNum;
+            break;
+        }
+        seqNum++;
+        windowTail++;
+    }
+    
+    // send the initial packets
+    for (int i = 0; i < windowTail; i++) {
+        while (!sendPacket(socketfd, &receiverAddr, receiverAddrLength, window[i]))
+            continue;
+        printPacketInfo("DATA", i + 1);
+    }
+}*/
+
 int main(int argc, char *argv[]) {
     if (argc == 1) {
         error("Please pass in arguments");
@@ -135,16 +161,16 @@ int main(int argc, char *argv[]) {
     portNum = atoi(argv[1]);
     setup(socketfd, senderAddr, portNum);
     
-    char buffer[BUFFER_SIZE] = {0};
+    char readBuffer[BUFFER_SIZE] = {0};
     int bytesRead = 0;
  
     while (1) {
-        receiverLength = recvfrom(socketfd, buffer, BUFFER_SIZE, 0, 
+        receiverLength = recvfrom(socketfd, readBuffer, BUFFER_SIZE, 0, 
                             (struct sockaddr *) &receiverAddr, &receiverAddrLength);
         
         if (receiverLength > 0) {
-            buffer[receiverLength] = 0;
-            FILE *fp = fopen(buffer, "r");
+            readBuffer[receiverLength] = 0;
+            FILE *fp = fopen(readBuffer, "r");
             
             if (fp == NULL) {
                 error("ERROR opening file");
@@ -153,30 +179,77 @@ int main(int argc, char *argv[]) {
             rewind(fp);
             int lastByteRead = 0;
             int seqNum = 1;
-            char packetBuffer[BUFFER_SIZE];
+            char writeBuffer[BUFFER_SIZE];
             int ackMsgLength = 0;
             
-            // send the file
-            while (1) {
-                bool isLastPacket = buildPacket(packetBuffer, fp, seqNum, lastByteRead);
-                
-                while(1) {
-                    if (!sendPacket(socketfd, &receiverAddr, receiverAddrLength, packetBuffer))
-                        continue;
-                    
-                    // receive ACK packet
-                    ackMsgLength = recvfrom(socketfd, buffer, HEADER_SIZE, 0, (struct sockaddr *) &receiverAddr, &receiverAddrLength);
-                    
-                    // current packet ACKed successfully, move onto next packet
-                    if (getAckNum(buffer) == seqNum + 1) {
-                        seqNum++;
-                        break;
-                    }
-                }
-                
-                if (isLastPacket)
+            char window[WINDOW_SIZE][BUFFER_SIZE];
+            int windowHead = 0;
+            int windowTail = 0;
+            int expectedAck = 2;
+            
+            bool sentLastPacket = false;
+            int lastSeqNum = 0;
+            
+            // fill the initial window
+            for (int i = 0; i < WINDOW_SIZE; i++) {
+                sentLastPacket = buildPacket(window[i], fp, seqNum, lastByteRead);
+                if (sentLastPacket) {
+                    windowTail = i;
+                    lastSeqNum = seqNum;
                     break;
+                }
+                seqNum++;
+                windowTail++;
             }
+            
+            // send the initial packets
+            for (int i = 0; i < windowTail; i++) {
+                while (!sendPacket(socketfd, &receiverAddr, receiverAddrLength, window[i]))
+                    continue;
+                printPacketInfo("DATA", i + 1);
+            }
+            
+            // listen for ACKs and send subsequent packets
+            while (1) {
+                // receive ACK packet
+                ackMsgLength = recvfrom(socketfd, readBuffer, HEADER_SIZE, 0, (struct sockaddr *) &receiverAddr, &receiverAddrLength);
+                printPacketInfo("ACK", getAckNum(readBuffer));
+                
+                if (ackMsgLength <= 0) {
+                    cout << "ERROR receiving empty ACK packet" << endl;
+                    continue;
+                } 
+                
+                // received last ACK, done!
+                if (getAckNum(readBuffer) == lastSeqNum)
+                    break;
+                
+                // packet ACKed successfully, move window onto next packet
+                else if (getAckNum(readBuffer) == expectedAck) {
+                    // if not done, build and send next packet
+                    if (!sentLastPacket) {
+                        sentLastPacket = buildPacket(window[windowHead], fp, seqNum, lastByteRead);
+                        cout << "sending: " << window[windowHead] << endl;
+                        while (!sendPacket(socketfd, &receiverAddr, receiverAddrLength, window[windowHead]))
+                            continue;
+                            
+                        printPacketInfo("DATA", seqNum);
+                        seqNum++;
+                        
+                        //handle last packet
+                        if (sentLastPacket) {
+                            lastSeqNum = seqNum;
+                        }
+                    }
+                        
+                    // increment windowHead
+                    windowHead  = (windowHead + 1) % WINDOW_SIZE;
+                    expectedAck++;
+                }   
+            }
+            
+            cout << "done sending file!" << endl;
+            
             fclose(fp);
         }
     }
