@@ -91,11 +91,15 @@ int getSeqNum(const char* buffer) {
 bool sendAckPacket(const int& socketfd, struct sockaddr_in* senderAddr, 
                 const socklen_t& senderAddrLength, const int& ackNum) {
     string header = buildHeaders(-1, ackNum, 0);
-    if (sendto(socketfd, header.c_str(), header.size(), 0, 
+    if (sendto(socketfd, header.c_str(), HEADER_SIZE, 0, 
                 (struct sockaddr *) senderAddr, senderAddrLength) < 0)
         return false;
     else
         return true;
+}
+
+void printPacketInfo(const string& packetType, const int& num) {
+    cout << packetType << " " << num << endl;
 }
 
 int main(int argc, char *argv[]) {
@@ -126,6 +130,7 @@ int main(int argc, char *argv[]) {
         int senderLength = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, 
                                 (struct sockaddr *) &senderAddr, &senderAddrLength);
         buffer[senderLength] = 0;
+        printPacketInfo("DATA", getSeqNum(buffer));
         
         if (senderLength > 0) {
             buffer[senderLength] = 0;
@@ -137,6 +142,7 @@ int main(int argc, char *argv[]) {
                 
             while (!sendAckPacket(sockfd, &senderAddr, senderAddrLength, getSeqNum(buffer) + 1))
                 continue;
+            printPacketInfo("ACK", getSeqNum(buffer) + 1);
         }
         
         if (isLastPacket(buffer)) {
