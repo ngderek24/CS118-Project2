@@ -9,12 +9,13 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <ctime>
 
 using namespace std;
 
 const int BUFFER_SIZE = 30;
 const int HEADER_SIZE = 20;
-const int WINDOW_SIZE = 4;
+int WINDOW_SIZE;
 
 void error(string msgString) {
     const char *msg = msgString.c_str();
@@ -23,11 +24,16 @@ void error(string msgString) {
 }
 
 // setup the connection between server and client
-void setup(int &socketfd, struct sockaddr_in &senderAddr, int portNum) {
+void setup(char* argv[], int &socketfd, struct sockaddr_in &senderAddr, double& corruptionProb) {
     // open socket
     socketfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (socketfd < 0)
         error("ERROR opening socket");
+    
+    // process input arguments
+    int portNum = atoi(argv[1]);
+    WINDOW_SIZE = atoi(argv[2]);
+    corruptionProb = atof(argv[3]);
     
     // zero out bytes of senderAddr
     bzero((char *) &senderAddr, sizeof(senderAddr));
@@ -128,28 +134,44 @@ void printPacketInfo(const string& packetType, const int& num) {
     cout << packetType << " " << num << endl;
 }
 
-void sendNextPacket(bool& sentLastPacket, char window[][BUFFER_SIZE], int& windowHead, 
+bool sendNextPacket(bool& sentLastPacket, char window[][BUFFER_SIZE], int& windowHead, 
                     FILE* fp, int& seqNum, int& lastByteRead, int& lastSeqNum, int& expectedAck,
-                    const int& socketfd, struct sockaddr_in* receiverAddr, const socklen_t& receiverAddrLength) {
-    if (!sentLastPacket) {
-        sentLastPacket = buildPacket(window[windowHead], fp, seqNum, lastByteRead);
-        //cout << "sending: " << window[windowHead] << endl;
+                    const int& socketfd, struct sockaddr_in* receiverAddr, const socklen_t& receiverAddrLength, char* readBuffer) {
+    // received last ACK, done!
+    if (getAckNum(readBuffer) == lastSeqNum)
+        return true;
+    
+    if (getAckNum(readBuffer) == expectedAck) {
+        // if not done, build and send next packet
+        if (!sentLastPacket) {
+            sentLastPacket = buildPacket(window[windowHead], fp, seqNum, lastByteRead);
+            //cout << "sending: " << window[windowHead] << endl;
+    
+            while (!sendPacket(socketfd, receiverAddr, receiverAddrLength, window[windowHead]))
+                continue;
         
-        while (!sendPacket(socketfd, receiverAddr, receiverAddrLength, window[windowHead]))
-            continue;
-            
-        printPacketInfo("DATA", seqNum);
-        seqNum++;
-        
-        //handle last packet
-        if (sentLastPacket) {
-            lastSeqNum = seqNum;
+            printPacketInfo("DATA", seqNum);
+            seqNum++;
+    
+            //handle last packet
+            if (sentLastPacket) {
+                lastSeqNum = seqNum;
+            }
         }
+    
+        // increment windowHead
+        windowHead  = (windowHead + 1) % WINDOW_SIZE;
+        expectedAck++;
     }
-        
-    // increment windowHead
-    windowHead  = (windowHead + 1) % WINDOW_SIZE;
-    expectedAck++;
+    
+    return false;
+}
+
+bool isCorrupted(const double& corruptionProb) {
+    int randomNum = rand() % 100 + 1;
+    int corruptionPercent = (int) corruptionProb * 100;
+    
+    return (randomNum <= corruptionPercent);
 }
 
 int main(int argc, char *argv[]) {
@@ -157,18 +179,19 @@ int main(int argc, char *argv[]) {
         error("Please pass in arguments");
     }   
     
-    int socketfd, portNum, receiverLength;
+    int socketfd, receiverLength;
     struct sockaddr_in senderAddr, receiverAddr;
     socklen_t receiverAddrLength = sizeof(receiverAddr);
+    double corruptionProb;
     
-    // get port number and setup
-    portNum = atoi(argv[1]);
-    setup(socketfd, senderAddr, portNum);
+    // setup
+    setup(argv, socketfd, senderAddr, corruptionProb);
     
     char readBuffer[BUFFER_SIZE] = {0};
     int bytesRead = 0;
  
     while (1) {
+        // receive filename
         receiverLength = recvfrom(socketfd, readBuffer, BUFFER_SIZE, 0, 
                             (struct sockaddr *) &receiverAddr, &receiverAddrLength);
         
@@ -223,17 +246,15 @@ int main(int argc, char *argv[]) {
                 } 
                 printPacketInfo("ACK", getAckNum(readBuffer));
                 
-                // received last ACK, done!
-                if (getAckNum(readBuffer) == lastSeqNum)
-                    break;
+                bool isCorruptedPacket = isCorrupted(corruptionProb);
                 
                 // packet ACKed successfully, move window onto next packet
-                else if (getAckNum(readBuffer) == expectedAck) {
-                    // if not done, build and send next packet
-                    sendNextPacket(sentLastPacket, window, windowHead, 
-                                    fp, seqNum, lastByteRead, lastSeqNum, expectedAck,
-                                    socketfd, &receiverAddr, receiverAddrLength);
-                }   
+                bool receivedLastACK = sendNextPacket(sentLastPacket, window, windowHead, 
+                                                        fp, seqNum, lastByteRead, lastSeqNum, expectedAck,
+                                                        socketfd, &receiverAddr, receiverAddrLength, readBuffer);
+                                                        
+                if (receivedLastACK)
+                    break;
             }
             
             cout << "done sending file!" << endl;
