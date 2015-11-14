@@ -104,6 +104,7 @@ void printPacketInfo(const string& packetType, const int& num) {
     cout << packetType << " " << num << endl;
 }
 
+// process data packet and respond with ACK
 bool processDataPacket(int senderLength, char* buffer, FILE* fp,
                         const int& sockfd, struct sockaddr_in* senderAddr, const socklen_t& senderAddrLength,
                         const bool& isCorruptedPacket, int& expectedSeqNum) {
