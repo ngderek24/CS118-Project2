@@ -23,7 +23,7 @@ void error(string msgString) {
 }
 
 void setup(struct hostent *sender, struct sockaddr_in& senderAddr,
-            char* argv[], int& sockfd, int& portno, string& filename) {
+            char* argv[], int& sockfd, int& portno, string& filename, double& corruptionProb) {
     // takes a string like "www.yahoo.com", 
     // and returns a struct hostent which contains information, 
     // as IP address, address type, the length of the addresses
@@ -35,6 +35,8 @@ void setup(struct hostent *sender, struct sockaddr_in& senderAddr,
     
     portno = atoi(argv[2]);
     filename = std::string(argv[3]);
+    corruptionProb = atof(argv[4]);
+    srand(time(NULL));
     
     sockfd = socket(AF_INET, SOCK_DGRAM, 0); //create a new socket
     if (sockfd < 0) 
@@ -102,6 +104,44 @@ void printPacketInfo(const string& packetType, const int& num) {
     cout << packetType << " " << num << endl;
 }
 
+bool processDataPacket(int senderLength, char* buffer, FILE* fp,
+                        const int& sockfd, struct sockaddr_in* senderAddr, const socklen_t& senderAddrLength,
+                        const bool& isCorruptedPacket, int& expectedSeqNum) {
+    bool returnVal = false; 
+    
+    if (senderLength > 0) {
+        buffer[senderLength] = 0;
+        printf("msg from sender: %s\n", buffer);
+        
+        // write to file iff not corrupted and expected packet
+        if (!isCorruptedPacket && (getSeqNum(buffer) == expectedSeqNum)) {
+            int bytesWritten = fwrite(buffer + HEADER_SIZE, 1, senderLength - HEADER_SIZE, fp);
+            if (bytesWritten <= 0)
+                error("ERROR writing to file");
+            
+            expectedSeqNum++;
+            
+            if (isLastPacket(buffer)) {
+                cout << "got last packet" << endl;
+                returnVal = true;
+            }
+        }    
+        
+        while (!sendAckPacket(sockfd, senderAddr, senderAddrLength, expectedSeqNum))
+            continue;
+        printPacketInfo("ACK", expectedSeqNum);
+    }
+    
+    return returnVal;
+}
+
+bool isCorrupted(const double& corruptionProb) {
+    int randomNum = rand() % 100 + 1;
+    int corruptionPercent = (int) corruptionProb * 100;
+    
+    return (randomNum <= corruptionPercent);
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 3) {
        fprintf(stderr,"usage %s hostname port\n", argv[0]);
@@ -116,39 +156,34 @@ int main(int argc, char *argv[]) {
 
     char buffer[BUFFER_SIZE];
     string filename;
+    double corruptionProb;
     
-    setup(sender, senderAddr, argv, sockfd, portno, filename);
+    setup(sender, senderAddr, argv, sockfd, portno, filename, corruptionProb);
     
+    // send the filename to sender
     if (sendto(sockfd, filename.c_str(), filename.size(), 0, 
             (struct sockaddr *) &senderAddr, senderAddrLength) < 0)
         error("sendto failed");
         
     FILE* fp = fopen(filename.c_str(), "w+");
     int bytesWritten = 0;
+    int expectedSeqNum = 1;
     
+    // receive data packets and process, and response 
     while (1) { 
         int senderLength = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, 
                                 (struct sockaddr *) &senderAddr, &senderAddrLength);
+        
         buffer[senderLength] = 0;
         printPacketInfo("DATA", getSeqNum(buffer));
         
-        if (senderLength > 0) {
-            buffer[senderLength] = 0;
-            printf("msg from sender: %s\n", buffer);
-            
-            bytesWritten = fwrite(buffer + HEADER_SIZE, 1, BUFFER_SIZE - HEADER_SIZE, fp);
-            if (bytesWritten <= 0)
-                error("ERROR writing to file");
-                
-            while (!sendAckPacket(sockfd, &senderAddr, senderAddrLength, getSeqNum(buffer) + 1))
-                continue;
-            printPacketInfo("ACK", getSeqNum(buffer) + 1);
-        }
-        
-        if (isLastPacket(buffer)) {
-            cout << "got last packet" << endl;
+        bool isCorruptedPacket = isCorrupted(corruptionProb);
+       
+        bool receivedLastPacket = processDataPacket(senderLength, buffer, fp,
+                                                    sockfd, &senderAddr, senderAddrLength,
+                                                    isCorruptedPacket, expectedSeqNum);
+        if (receivedLastPacket)
             break;
-        }
     }
     
     close(sockfd);
