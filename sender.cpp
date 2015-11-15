@@ -135,33 +135,39 @@ void printPacketInfo(const string& packetType, const int& num) {
 }
 
 bool sendNextPacket(bool& sentLastPacket, char window[][BUFFER_SIZE], int& windowHead, 
-                    FILE* fp, int& seqNum, int& lastByteRead, int& lastSeqNum, int& expectedAck,
+                    FILE* fp, int& seqNum, int& lastByteRead, int& lastSeqNum, int& expectedAck, bool isCorruptedPacket,
                     const int& socketfd, struct sockaddr_in* receiverAddr, const socklen_t& receiverAddrLength, char* readBuffer) {
     // received last ACK, done!
-    if (getAckNum(readBuffer) == lastSeqNum)
+    int ackNum = getAckNum(readBuffer); 
+    if (ackNum == lastSeqNum)
         return true;
     
-    if (getAckNum(readBuffer) == expectedAck) {
-        // if not done, build and send next packet
-        if (!sentLastPacket) {
-            sentLastPacket = buildPacket(window[windowHead], fp, seqNum, lastByteRead);
-            //cout << "sending: " << window[windowHead] << endl;
+    cout << "got ACK " << ackNum << " expected ACK " << expectedAck << endl;
     
-            while (!sendPacket(socketfd, receiverAddr, receiverAddrLength, window[windowHead]))
-                continue;
+    if (!isCorruptedPacket && (ackNum >= expectedAck)) {
+        int numPacketsToSend = ackNum - expectedAck + 1;
+        for (int i = 0; i < numPacketsToSend; i++) {
+            // if not done, build and send next packet
+            if (!sentLastPacket) {
+                sentLastPacket = buildPacket(window[windowHead], fp, seqNum, lastByteRead);
+                //cout << "sending: " << window[windowHead] << endl;
+    
+                while (!sendPacket(socketfd, receiverAddr, receiverAddrLength, window[windowHead]))
+                    continue;
         
-            printPacketInfo("DATA", seqNum);
-            seqNum++;
+                printPacketInfo("DATA", seqNum);
+                seqNum++;
     
-            //handle last packet
-            if (sentLastPacket) {
-                lastSeqNum = seqNum;
+                //handle last packet
+                if (sentLastPacket) {
+                    lastSeqNum = seqNum;
+                }
             }
-        }
     
-        // increment windowHead
-        windowHead  = (windowHead + 1) % WINDOW_SIZE;
-        expectedAck++;
+            // increment windowHead
+            windowHead  = (windowHead + 1) % WINDOW_SIZE;
+            expectedAck++;
+        }
     }
     
     return false;
@@ -175,6 +181,7 @@ bool isCorrupted(const double& corruptionProb) {
 }
 
 int main(int argc, char *argv[]) {
+    //TODO: change number of arguments required
     if (argc == 1) {
         error("Please pass in arguments");
     }   
@@ -187,10 +194,9 @@ int main(int argc, char *argv[]) {
     // setup
     setup(argv, socketfd, senderAddr, corruptionProb);
     
-    char readBuffer[BUFFER_SIZE] = {0};
-    int bytesRead = 0;
- 
     while (1) {
+        char readBuffer[BUFFER_SIZE] = {0};
+        int bytesRead = 0;
         // receive filename
         receiverLength = recvfrom(socketfd, readBuffer, BUFFER_SIZE, 0, 
                             (struct sockaddr *) &receiverAddr, &receiverAddrLength);
@@ -250,7 +256,7 @@ int main(int argc, char *argv[]) {
                 
                 // packet ACKed successfully, move window onto next packet
                 bool receivedLastACK = sendNextPacket(sentLastPacket, window, windowHead, 
-                                                        fp, seqNum, lastByteRead, lastSeqNum, expectedAck,
+                                                        fp, seqNum, lastByteRead, lastSeqNum, expectedAck, isCorruptedPacket,
                                                         socketfd, &receiverAddr, receiverAddrLength, readBuffer);
                                                         
                 if (receivedLastACK)
