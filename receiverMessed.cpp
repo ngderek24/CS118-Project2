@@ -117,7 +117,7 @@ bool processDataPacket(int senderLength, char* buffer, FILE* fp,
         // write to file iff not corrupted and expected packet
         if (!isCorruptedPacket && (getSeqNum(buffer) == expectedSeqNum)) {
             int bytesWritten = fwrite(buffer + HEADER_SIZE, 1, senderLength - HEADER_SIZE, fp);
-            if (bytesWritten <= 0)
+            if (bytesWritten < 0)
                 error("ERROR writing to file");
             
             expectedSeqNum++;
@@ -138,7 +138,9 @@ bool processDataPacket(int senderLength, char* buffer, FILE* fp,
 
 bool isCorrupted(const double& corruptionProb) {
     int randomNum = rand() % 100 + 1;
-    int corruptionPercent = (int) corruptionProb * 100;
+    int corruptionPercent = corruptionProb * 100;
+    
+    cout << "randomNum: " << randomNum << endl;
     
     return (randomNum <= corruptionPercent);
 }
