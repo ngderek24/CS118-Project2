@@ -24,9 +24,6 @@ void error(string msgString) {
 
 void setup(struct hostent *sender, struct sockaddr_in& senderAddr,
             char* argv[], int& sockfd, int& portno, string& filename, double& lossProb, double& corruptionProb) {
-    // takes a string like "www.yahoo.com", 
-    // and returns a struct hostent which contains information, 
-    // as IP address, address type, the length of the addresses
     sender = gethostbyname(argv[1]); 
     if (sender == NULL) {
         fprintf(stderr,"ERROR, no such host\n");
@@ -76,7 +73,7 @@ bool isLastPacket(char* buffer) {
 // extracts sequence number from a packet buffer
 int getSeqNum(const char* buffer) {
     int len = strlen(buffer);
-    char tempBuffer[HEADER_SIZE];
+    char tempBuffer[HEADER_SIZE] = {0};
     int seqNum = -1;
     
     for (int i = 0; i < len; i++) {
@@ -116,9 +113,6 @@ bool processDataPacket(int senderLength, char* buffer, FILE* fp,
     
     if (senderLength > 0) {
         buffer[senderLength] = 0;
-        //printf("msg from sender: %s\n", buffer);
-        
-        //cout << "expectedSeqNum: " << expectedSeqNum << endl;
         
         // write to file iff not corrupted and expected packet
         if (!isCorruptedPacket && (getSeqNum(buffer) == expectedSeqNum)) {
@@ -131,9 +125,6 @@ bool processDataPacket(int senderLength, char* buffer, FILE* fp,
                 returnVal = true;
                 fclose(fp);
             }
-            //else {
-                
-            //}
             expectedSeqNum++;
             
         }    
