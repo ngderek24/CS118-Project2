@@ -174,7 +174,6 @@ bool sendNextPacket(bool& sentLastPacket, char window[][BUFFER_SIZE], int& windo
         alarm(TIMEOUT);
         
         int numPacketsToSend = ackNum - expectedAck + 1;
-        cout << "ackNum: " << ackNum << " expectedAck: " << expectedAck << endl;
         for (int i = 0; i < numPacketsToSend; i++) {
             // if not done, build and send next packet
             if (!sentLastPacket) {
