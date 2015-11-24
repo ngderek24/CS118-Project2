@@ -101,16 +101,13 @@ bool buildPacket(char* packetBuffer, FILE* fp, const int& seqNum, int& lastByteR
     }
     
     // copy header into packetBuffer
-    //memset(packetBuffer, ' ', BUFFER_SIZE);
     strcpy(packetBuffer, headers.c_str());
     int headerSize = headers.size();
     memset(packetBuffer + headerSize, ' ', BUFFER_SIZE - headerSize);
     
     strcpy(packetBuffer + HEADER_SIZE, fileContent);
-    //packetBuffer[HEADER_SIZE + bytesRead] = 'X';
     
     if (feof(fp)) {
-        cout << "reached eof" << endl;
         returnVal = true;
     }
     
@@ -123,7 +120,7 @@ bool buildPacket(char* packetBuffer, FILE* fp, const int& seqNum, int& lastByteR
 
 // get acknowledgement number from packet header
 int getAckNum(const char* buffer) {
-    char tempBuffer[HEADER_SIZE];
+    char tempBuffer[HEADER_SIZE] = {0};
     int len = strlen(buffer);
     int firstNewline = -1;
     int count = 0;
@@ -148,15 +145,6 @@ void printPacketInfo(const string& packetType, const int& num) {
     cout << packetType << " " << num << endl;
 }
 
-void printWindow(const char window[][BUFFER_SIZE]) {
-    for (int i = 0 ; i < WINDOW_SIZE; i++) {
-        for (int j = 0; j < BUFFER_SIZE; j++) {
-            cout << window[i][j];
-        }
-        cout << endl;
-    }
-}
-
 bool sendNextPacket(bool& sentLastPacket, char window[][BUFFER_SIZE], int& windowHead, 
                     FILE* fp, int& seqNum, int& lastByteRead, int& lastSeqNum, int& expectedAck, 
                     const bool& isLostPacket, const bool& isCorruptedPacket,
@@ -164,8 +152,8 @@ bool sendNextPacket(bool& sentLastPacket, char window[][BUFFER_SIZE], int& windo
     
     int ackNum = getAckNum(readBuffer);
     
+    // received last ACK, done
     if (ackNum == lastSeqNum) {
-        cout << "got last ACK!" << endl;
         cout << "not lost, not corrupted" << endl;
         return true;
     }
@@ -182,20 +170,15 @@ bool sendNextPacket(bool& sentLastPacket, char window[][BUFFER_SIZE], int& windo
     }
     
     if (!isLostPacket && !isCorruptedPacket && (ackNum >= expectedAck)) {
-        // received last ACK, done!
-        //if (ackNum == lastSeqNum) 
-          //  return true;
-    
-        //cout << "got ACK " << ackNum << " expected ACK " << expectedAck << endl;
         
         alarm(TIMEOUT);
         
         int numPacketsToSend = ackNum - expectedAck + 1;
+        cout << "ackNum: " << ackNum << " expectedAck: " << expectedAck << endl;
         for (int i = 0; i < numPacketsToSend; i++) {
             // if not done, build and send next packet
             if (!sentLastPacket) {
                 sentLastPacket = buildPacket(window[windowHead], fp, seqNum, lastByteRead);
-                //cout << "sending: " << window[windowHead] << endl;
     
                 while (!sendPacket(socketfd, receiverAddr, receiverAddrLength, window[windowHead]))
                     continue;
@@ -236,7 +219,7 @@ bool isLost(const double& lossProb) {
 // extracts sequence number from a packet buffer
 int getSeqNum(const char* buffer) {
     int len = strlen(buffer);
-    char tempBuffer[HEADER_SIZE];
+    char tempBuffer[HEADER_SIZE] = {0};
     int seqNum = -1;
     
     for (int i = 0; i < len; i++) {
@@ -283,7 +266,6 @@ void sendCurrentWindow(char window[][BUFFER_SIZE], int windowHead,
 }
 
 int main(int argc, char *argv[]) {
-    //TODO: change number of arguments required
     if (argc != 5) {
         error("Please pass in arguments");
     }   
@@ -340,15 +322,11 @@ int main(int argc, char *argv[]) {
                     windowTail++;
                     seqNum++;
                     lastSeqNum = seqNum;
-                    //cout << "lastSeqNum: " << lastSeqNum << endl;
                     break;
                 }
                 seqNum++;
                 windowTail++;
             }
-            
-            //cout << "printing initial window" << endl; 
-            //printWindow(window);
             
             sendInitialWindow(window, windowTail, socketfd, &receiverAddr, receiverAddrLength);
             
@@ -385,8 +363,6 @@ int main(int argc, char *argv[]) {
             cout << "done sending file!" << endl;
             
             fclose(fp);
-            //if (setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, &tv, (socklen_t) sizeof(tv)) < 0)
-              //  perror("ERROR: getsockopt timeout");
         }
     }
     
