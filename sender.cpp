@@ -15,7 +15,7 @@
 
 using namespace std;
 
-const int BUFFER_SIZE = 30;
+const int BUFFER_SIZE = 900;
 const int HEADER_SIZE = 20;
 int WINDOW_SIZE;
 const int TIMEOUT = 2;
@@ -33,7 +33,7 @@ void handleTimeout(int sig) {
 }
 
 // setup the connection between server and client
-void setup(char* argv[], int &socketfd, struct sockaddr_in &senderAddr, double& corruptionProb) {
+void setup(char* argv[], int &socketfd, struct sockaddr_in &senderAddr, double& lossProb, double& corruptionProb) {
     // open socket
     socketfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (socketfd < 0)
@@ -42,7 +42,8 @@ void setup(char* argv[], int &socketfd, struct sockaddr_in &senderAddr, double& 
     // process input arguments
     int portNum = atoi(argv[1]);
     WINDOW_SIZE = atoi(argv[2]);
-    corruptionProb = atof(argv[3]);
+    lossProb = atof(argv[3]);
+    corruptionProb = atof(argv[4]);
     
     // zero out bytes of senderAddr
     bzero((char *) &senderAddr, sizeof(senderAddr));
@@ -109,6 +110,7 @@ bool buildPacket(char* packetBuffer, FILE* fp, const int& seqNum, int& lastByteR
     //packetBuffer[HEADER_SIZE + bytesRead] = 'X';
     
     if (feof(fp)) {
+        cout << "reached eof" << endl;
         returnVal = true;
     }
     
@@ -156,17 +158,35 @@ void printWindow(const char window[][BUFFER_SIZE]) {
 }
 
 bool sendNextPacket(bool& sentLastPacket, char window[][BUFFER_SIZE], int& windowHead, 
-                    FILE* fp, int& seqNum, int& lastByteRead, int& lastSeqNum, int& expectedAck, bool isCorruptedPacket,
+                    FILE* fp, int& seqNum, int& lastByteRead, int& lastSeqNum, int& expectedAck, 
+                    const bool& isLostPacket, const bool& isCorruptedPacket,
                     const int& socketfd, struct sockaddr_in* receiverAddr, const socklen_t& receiverAddrLength, char* readBuffer) {
     
     int ackNum = getAckNum(readBuffer);
     
-    if (!isCorruptedPacket && (ackNum >= expectedAck)) {
-        // received last ACK, done!
-        if (ackNum == lastSeqNum)
-            return true;
+    if (ackNum == lastSeqNum) {
+        cout << "got last ACK!" << endl;
+        cout << "not lost, not corrupted" << endl;
+        return true;
+    }
+    else {
+        if (isLostPacket)
+            cout << "lost, ";
+        else
+            cout << "not lost, ";
+        
+        if (isCorruptedPacket)
+            cout << "corrupted" << endl;
+        else
+            cout << "not corrupted" << endl;
+    }
     
-        cout << "got ACK " << ackNum << " expected ACK " << expectedAck << endl;
+    if (!isLostPacket && !isCorruptedPacket && (ackNum >= expectedAck)) {
+        // received last ACK, done!
+        //if (ackNum == lastSeqNum) 
+          //  return true;
+    
+        //cout << "got ACK " << ackNum << " expected ACK " << expectedAck << endl;
         
         alarm(TIMEOUT);
         
@@ -181,6 +201,7 @@ bool sendNextPacket(bool& sentLastPacket, char window[][BUFFER_SIZE], int& windo
                     continue;
         
                 printPacketInfo("DATA", seqNum);
+                
                 seqNum++;
     
                 //handle last packet
@@ -202,11 +223,14 @@ bool isCorrupted(const double& corruptionProb) {
     int randomNum = rand() % 100 + 1;
     int corruptionPercent = corruptionProb * 100;
     
-    if (randomNum <= corruptionPercent)
-        cout << "corrupted" << endl;
-    else
-        cout << "not corrupted" << endl;
     return (randomNum <= corruptionPercent);
+}
+
+bool isLost(const double& lossProb) {
+    int randomNum = rand() % 100 + 1;
+    int lossPercent = lossProb * 100;
+    
+    return (randomNum <= lossPercent);
 }
 
 // extracts sequence number from a packet buffer
@@ -260,17 +284,18 @@ void sendCurrentWindow(char window[][BUFFER_SIZE], int windowHead,
 
 int main(int argc, char *argv[]) {
     //TODO: change number of arguments required
-    if (argc == 1) {
+    if (argc != 5) {
         error("Please pass in arguments");
     }   
     
     int socketfd, receiverLength;
     struct sockaddr_in senderAddr, receiverAddr;
     socklen_t receiverAddrLength = sizeof(receiverAddr);
+    double lossProb;
     double corruptionProb;
     
     // setup
-    setup(argv, socketfd, senderAddr, corruptionProb);
+    setup(argv, socketfd, senderAddr, lossProb, corruptionProb);
     
     while (1) {
         char readBuffer[BUFFER_SIZE] = {0};
@@ -342,13 +367,13 @@ int main(int argc, char *argv[]) {
                 printPacketInfo("ACK", getAckNum(readBuffer));
                 
                 bool isCorruptedPacket = isCorrupted(corruptionProb);
+                bool isLostPacket = isLost(lossProb);
                 
                 // packet ACKed successfully, move window onto next packet
                 bool receivedLastACK = sendNextPacket(sentLastPacket, window, windowHead, 
-                                                        fp, seqNum, lastByteRead, lastSeqNum, expectedAck, isCorruptedPacket,
+                                                        fp, seqNum, lastByteRead, lastSeqNum, expectedAck, 
+                                                        isLostPacket, isCorruptedPacket,
                                                         socketfd, &receiverAddr, receiverAddrLength, readBuffer);
-                                                        
-                //cout << "for ACK " << getAckNum(readBuffer) << " receivedLastAck: " << receivedLastACK << endl;
                                                         
                 if (receivedLastACK) {
                     // turn off alarm
@@ -360,6 +385,8 @@ int main(int argc, char *argv[]) {
             cout << "done sending file!" << endl;
             
             fclose(fp);
+            //if (setsockopt(socketfd, SOL_SOCKET, SO_RCVTIMEO, &tv, (socklen_t) sizeof(tv)) < 0)
+              //  perror("ERROR: getsockopt timeout");
         }
     }
     
